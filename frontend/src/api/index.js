@@ -7,3 +7,9 @@ export const fetchTables = async () => {
   if (!res.ok) throw new Error('获取桌台失败');
   return await res.json();
 };
+
+export const fetchMenu = async () => {
+  const res = await fetch(`${API_BASE}/menu`);
+  if (!res.ok) throw new Error('获取菜单失败');
+  return await res.json();
+};
