@@ -5,22 +5,22 @@
       <span>在线：服务员端</span>
     </header>
     
-    <div class="grid">
-      <!-- 循环渲染 20 个桌台 -->
+    <div v-if="loading" class="loading">加载桌台数据中...</div>
+    
+    <div v-else class="grid">
+      <!-- 循环渲染后端传来的真实桌台 -->
       <div 
-        v-for="i in 20" 
-        :key="i" 
+        v-for="table in tables" 
+        :key="table.id" 
         class="table-card"
-        :class="i === 15 ? 'busy' : 'free'"
+        :class="table.status"
       >
-        <div class="table-name">Mesa {{ i.toString().padStart(2, '0') }}</div>
-        <!-- 如果是 15 号桌，显示占用状态和金额，否则显示空闲 -->
-        <div v-if="i === 15" class="table-info">
-          <span>S/ 45.00</span>
-          <span class="time">30 min</span>
-        </div>
-        <div v-else class="table-info">
-          <span>Disponible</span>
+        <!-- 显示西语桌号 -->
+        <div class="table-name">{{ table.name_es }}</div>
+        
+        <div class="table-info">
+          <span v-if="table.status === 'busy'">S/ {{ table.amount.toFixed(2) }}</span>
+          <span v-else>Disponible</span>
         </div>
       </div>
     </div>
@@ -28,60 +28,32 @@
 </template>
 
 <script setup>
+import { ref, onMounted } from 'vue'
+import { fetchTables } from './api/index.js'
+
+const tables = ref([])
+const loading = ref(true)
+
+onMounted(async () => {
+  try {
+    tables.value = await fetchTables()
+  } catch (error) {
+    alert(error.message)
+  } finally {
+    loading.value = false
+  }
+})
 </script>
 
 <style scoped>
-.board-container {
-  padding: 10px;
-  background-color: #f3f4f6;
-  min-height: 100vh;
-}
-
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 15px;
-  padding: 0 5px;
-}
-
-.grid {
-  display: grid;
-  /* 强约束 3 列，间距 10px */
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
-
-.table-card {
-  padding: 15px 10px;
-  border-radius: 8px;
-  color: white;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  min-height: 90px; /* 严格控制高度，防面条化 */
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-
-.table-name {
-  font-size: 18px;
-  font-weight: bold;
-}
-
-.table-info {
-  margin-top: 10px;
-  font-size: 14px;
-  display: flex;
-  justify-content: space-between;
-}
-
-/* 颜色状态 */
-.free { background-color: #10b981; } /* 空闲绿 */
-.busy { background-color: #ef4444; } /* 用餐红 */
-
-.time {
-  background-color: rgba(0,0,0,0.2);
-  padding: 0 4px;
-  border-radius: 4px;
-}
+/* 样式和之前一样保持不变 */
+.board-container { padding: 10px; background-color: #f3f4f6; min-height: 100vh; }
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding: 0 5px; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.table-card { padding: 15px 10px; border-radius: 8px; color: white; display: flex; flex-direction: column; justify-content: space-between; min-height: 90px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+.table-name { font-size: 18px; font-weight: bold; }
+.table-info { margin-top: 10px; font-size: 14px; display: flex; justify-content: space-between; }
+.free { background-color: #10b981; }
+.busy { background-color: #ef4444; }
+.loading { text-align: center; padding: 50px; font-size: 20px; color: #666; }
 </style>
