@@ -1,9 +1,15 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List
+from database import get_db, init_db
 
 app = FastAPI()
 
-# 允许跨域
+@app.on_event("startup")
+def startup():
+    init_db()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -12,40 +18,101 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/api/ping")
-def ping():
-    return {"message": "Pong! 后端已经跑起来了。"}
+# ----- 数据模型 -----
+class OrderItem(BaseModel):
+    dish_id: int
+    name_es: str
+    quantity: int
+    remarks: List[str]
 
-# 新增获取桌台列表的接口
+class OrderSubmit(BaseModel):
+    table_id: int
+    submit_id: str
+    items: List[OrderItem]
+
+# ----- 接口 -----
+
 @app.get("/api/tables")
 def get_tables():
-    # 模拟生成 20 张桌台的数据
-    tables = []
-    for i in range(1, 21):
-        # 为了演示，我们让 15 号桌变成用餐中
-        status = "busy" if i == 15 else "free"
-        amount = 45.00 if i == 15 else 0.00
+    conn = get_db()
+    tables = conn.execute("SELECT * FROM tables").fetchall()
+    conn.close()
+    
+    result = []
+    for t in tables:
+        # 直接读取数据库里的真实状态！
+        real_status = t["status"] 
         
-        tables.append({
-            "id": i,
-            "name_zh": f"{i}号桌",
-            "name_es": f"Mesa {i:02d}",
-            "status": status,
-            "amount": amount
+        result.append({
+            "id": t["id"], 
+            "name_zh": t["name_zh"], 
+            "name_es": t["name_es"],
+            # 如果是 busy 就传 busy，否则传 free
+            "status": "busy" if real_status == "busy" else "free", 
+            "amount": 45.00 if real_status == "busy" else 0.00 # 金额暂时写死，以后再算
         })
-    return tables
+    return result
 
 @app.get("/api/menu")
 def get_menu():
-    # 模拟真实的菜单数据，带有交叉 Tags
-    menu = [
-        {"id": 1, "name_es": "CHAUFA CON POLLO", "name_zh": "鸡肉炒饭", "price": 12.00, "tags": ["炒饭", "鸡肉"]},
-        {"id": 2, "name_es": "CHAUFA CHANCHO", "name_zh": "烤猪炒饭", "price": 14.00, "tags": ["炒饭", "猪肉"]},
-        {"id": 3, "name_es": "CHAUFA CARNE", "name_zh": "牛肉炒饭", "price": 20.00, "tags": ["炒饭", "牛肉"]},
-        {"id": 4, "name_es": "TALLARIN POLLO", "name_zh": "鸡肉炒面", "price": 12.00, "tags": ["炒面", "鸡肉"]},
-        {"id": 5, "name_es": "LOMO SALTADO", "name_zh": "秘鲁炒牛柳", "price": 25.00, "tags": ["热菜", "牛肉", "招牌"]},
-        {"id": 6, "name_es": "POLLO A LA BRAZA", "name_zh": "烤鸡", "price": 18.00, "tags": ["热菜", "鸡肉", "招牌"]},
-        {"id": 7, "name_es": "ARROZ BLANCO", "name_zh": "白饭", "price": 6.00, "tags": ["主食"]},
-        {"id": 8, "name_es": "INCA COLA", "name_zh": "印加可乐", "price": 8.00, "tags": ["饮料"]},
-    ]
+    # 从数据库真实读取菜单
+    conn = get_db()
+    dishes = conn.execute("SELECT * FROM dishes WHERE is_sold_out = 0").fetchall()
+    conn.close()
+    
+    # 为了兼容前端的 tags，这里先死板地把所有菜都随便塞两个 tag (后续我们会建立真正的 Tag 表)
+    menu = []
+    for d in dishes:
+        menu.append({
+            "id": d["id"], "name_es": d["name_es"], "name_zh": d["name_zh"],
+            "price": d["price"] / 100.0, # 把分转成元
+            "tags": ["招牌", "热菜"] if d["id"] < 5 else ["饮料"] # 暂时的假tag
+        })
     return menu
+
+@app.post("/api/orders")
+def submit_order(order: OrderSubmit):
+    conn = get_db()
+    try:
+        # 开启事务防并发
+        conn.execute("BEGIN IMMEDIATE")
+        
+        # 1. 幂等去重（防连点）
+        existing = conn.execute("SELECT id FROM orders WHERE submit_id = ?", (order.submit_id,)).fetchone()
+        if existing:
+            conn.rollback()
+            return {"status": "success", "message": "订单已存在，忽略重复提交"}
+            
+        # 2. 写入订单主表
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO orders (table_id, submit_id) VALUES (?, ?)", (order.table_id, order.submit_id))
+        order_id = cursor.lastrowid
+        
+        # 3. 写入出单票 (这里暂时所有菜都发给厨房)
+        cursor.execute("INSERT INTO tickets (order_id, batch_id, station) VALUES (?, 1, 'kitchen')", (order_id,))
+        ticket_id = cursor.lastrowid
+        
+        # 4. 写入订单明细
+        for item in order.items:
+            # 查真实价格快照
+            dish = cursor.execute("SELECT price FROM dishes WHERE id = ?", (item.dish_id,)).fetchone()
+            price_snapshot = dish["price"] if dish else 0
+            
+            cursor.execute("""
+                INSERT INTO order_items (ticket_id, dish_id, quantity, notes_snapshot, dish_name_es_snapshot, price_snapshot) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (ticket_id, item.dish_id, item.quantity, ",".join(item.remarks), item.name_es, price_snapshot))
+            
+        # 5. 更新桌台状态
+        cursor.execute("UPDATE tables SET status = 'busy' WHERE id = ?", (order.table_id,))
+            
+        conn.commit()
+        print(f"\n✅ [数据库落盘] 订单 {order_id} 写入成功！桌号: {order.table_id}\n")
+        return {"status": "success", "message": "订单已接收并入库"}
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"\n❌ 订单写入失败: {e}\n")
+        raise HTTPException(status_code=500, detail="订单写入失败")
+    finally:
+        conn.close()

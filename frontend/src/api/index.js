@@ -13,3 +13,13 @@ export const fetchMenu = async () => {
   if (!res.ok) throw new Error('获取菜单失败');
   return await res.json();
 };
+
+export const submitOrderApi = async (orderData) => {
+  const res = await fetch(`${API_BASE}/orders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(orderData)
+  });
+  if (!res.ok) throw new Error('提交订单失败');
+  return await res.json();
+};

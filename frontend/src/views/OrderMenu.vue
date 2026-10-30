@@ -87,6 +87,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchMenu } from '../api/index.js'
+import { submitOrderApi } from '../api/index.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -152,14 +153,40 @@ const confirmAdd = () => {
   closeSheet()
 }
 
-// 提交订单
-const submitOrder = () => {
+const submitOrder = async () => {
+  // 1. 测试点击是否生效
+  alert("按钮已点击，准备发送...") 
+
   if (cart.value.length === 0) {
     alert("购物车是空的！")
     return
   }
-  console.log("准备提交的购物车数据:", cart.value)
-  alert(`成功添加 ${cartCount.value} 个菜到购物车！下一步连后端打印！`)
+  
+  // 组装发给后端的数据
+  const orderData = {
+    table_id: parseInt(tableId),
+    submit_id: Date.now().toString() + Math.random().toString(36).substring(2), // 兼容性写法
+    items: cart.value.map(item => ({
+      dish_id: item.dish.id,
+      name_es: item.dish.name_es,
+      quantity: item.quantity,
+      remarks: item.remarks
+    }))
+  }
+
+  try {
+    // 2. 测试网络请求是否发得出去
+    alert("正在连接后端...") 
+    await submitOrderApi(orderData)
+    
+    alert(`发送成功！已通知厨房并存入数据库。`)
+    cart.value = [] 
+    router.push('/') 
+  } catch (error) {
+    // 3. 捕获网络错误（比如连不上后端）
+    alert("提交失败: " + error.message)
+    console.error(error)
+  }
 }
 
 const goBack = () => { router.push('/') }
