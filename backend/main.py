@@ -116,3 +116,40 @@ def submit_order(order: OrderSubmit):
         raise HTTPException(status_code=500, detail="订单写入失败")
     finally:
         conn.close()
+
+#厨房接口
+@app.get("/api/kitchen/tickets")
+def get_kitchen_tickets():
+    conn = get_db()
+    # 联表查询，把待出餐的票和对应的菜品明细一起拉出来
+    tickets = conn.execute("SELECT * FROM tickets WHERE status = 'pending'").fetchall()
+    
+    result = []
+    for t in tickets:
+        # 获取该票下的所有菜
+        items = conn.execute("SELECT * FROM order_items WHERE ticket_id = ?", (t["id"],)).fetchall()
+        # 获取桌号
+        order = conn.execute("SELECT table_id FROM orders WHERE id = ?", (t["order_id"],)).fetchone()
+        
+        result.append({
+            "ticket_id": t["id"],
+            "table_id": order["table_id"],
+            "batch_id": t["batch_id"],
+            "items": [{
+                "name_es": i["dish_name_es_snapshot"],
+                "quantity": i["quantity"],
+                "remarks": i["notes_snapshot"]
+            } for i in items]
+        })
+    conn.close()
+    return result
+
+@app.post("/api/kitchen/tickets/{ticket_id}/complete")
+def complete_ticket(ticket_id: int):
+    conn = get_db()
+    try:
+        conn.execute("UPDATE tickets SET status = 'completed' WHERE id = ?", (ticket_id,))
+        conn.commit()
+        return {"status": "success"}
+    finally:
+        conn.close()
